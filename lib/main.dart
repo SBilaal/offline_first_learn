@@ -142,6 +142,7 @@ class _OrderHomePageState extends State<OrderHomePage> {
   late List<Command> _commands;
   bool isUploading = false;
   bool isDeleting = false;
+  bool isRunning = false;
   BookOrder? order;
   late StreamSubscription<ConnectivityResult> _connectivitySubscription;
   late StreamSubscription<InternetConnectionStatus> _internConnectSubscription;
@@ -154,24 +155,40 @@ class _OrderHomePageState extends State<OrderHomePage> {
 
     BookOrderStore().orderStoreListenable.addListener(() {
       _commands = _bookOrderRepo.getAllCommands();
-      postOrder();
+      print("in store listenable");
+      print(isRunning);
+      postOrder(
+        isRunning: isRunning,
+        onIsRunningChanged: (status) {
+          print("$status: store listenable");
+          isRunning = status;
+        },
+      );
     });
 
-    // _connectivitySubscription =
-    //     Connectivity().onConnectivityChanged.listen((event) async {
-    //   postOrder();
-    // });
+    _connectivitySubscription =
+        Connectivity().onConnectivityChanged.listen((event) async {
+      print("in connectivity: $event");
+      print(isRunning);
+      postOrder(
+        isRunning: isRunning,
+        onIsRunningChanged: (status) {
+          print("$status: connectivity");
+          isRunning = status;
+        },
+      );
+    });
 
     _internConnectSubscription =
         InternetConnectionChecker().onStatusChange.listen((status) {
-      switch (status) {
-        case InternetConnectionStatus.connected:
-          postOrder();
-          print('Data connection is available.');
-          break;
-        case InternetConnectionStatus.disconnected:
-          print('You are disconnected from the internet.');
-          break;
+      if (status == InternetConnectionStatus.connected) {
+        postOrder(
+          isRunning: isRunning,
+          onIsRunningChanged: (status) {
+            print("$status: interConnect");
+            isRunning = status;
+          },
+        );
       }
     });
   }
@@ -183,16 +200,23 @@ class _OrderHomePageState extends State<OrderHomePage> {
     super.dispose();
   }
 
-  void postOrder() {
-    setState(() {
-      isUploading = true;
-    });
-    _bookOrderRepo.runCommands().then((value) {
-      _orders = _bookOrderRepo.getOrders();
+  Future<void> postOrder(
+      {required bool isRunning,
+      required void Function(bool) onIsRunningChanged}) async {
+    if (!isRunning) {
+      onIsRunningChanged(true);
       setState(() {
-        isUploading = false;
+        isUploading = true;
       });
-    });
+      await _bookOrderRepo.runCommands().then((value) {
+        print('after run commands.');
+        _orders = _bookOrderRepo.getOrders();
+        setState(() {
+          isUploading = false;
+        });
+      });
+      onIsRunningChanged(false);
+    }
   }
 
   @override
