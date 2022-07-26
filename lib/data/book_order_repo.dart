@@ -73,16 +73,14 @@ class BookOrderRepo {
 
         result = await retry(() => receiver());
 
-        result.when(
-          success: (_) {
-            _bookOrderStore.deleteCommand();
-            print('Success');
-          },
-          failure: (error) async {
-            command.status = UploadStatus.failed;
-            print('Failure');
-          },
-        );
+        if (result is Success) {
+          _bookOrderStore.deleteCommand();
+          print('Success');
+        } else {
+          command.status = UploadStatus.failed;
+          print('Failure');
+          break;
+        }
       }
     }
   }
