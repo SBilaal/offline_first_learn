@@ -36,11 +36,15 @@ void main() async {
   // await Hive.openBox('tasks_a');
   // await Hive.openBox('tasks_b');
   await Hive.openBox<Command>('order');
-  // await initializeService();
+  await Hive.openBox('queue_order');
+  await initializeService();
   runApp(const MyApp());
 }
 
+int count = 0;
+
 Future<void> initializeService() async {
+  print('in initialize service');
   final service = FlutterBackgroundService();
   await service.configure(
     androidConfiguration: AndroidConfiguration(
@@ -52,22 +56,19 @@ Future<void> initializeService() async {
       isForegroundMode: true,
     ),
     iosConfiguration: IosConfiguration(
-      // auto start service
       autoStart: true,
 
-      // this will be executed when app is in foreground in separated isolate
       onForeground: onStart,
 
-      // you have to enable background fetch capability on xcode project
       onBackground: (service) {
         return false;
       },
     ),
   );
-  // service.startService();
 }
 
 void onStart(ServiceInstance service) async {
+  print('in onstart');
   if (service is AndroidServiceInstance) {
     service.on('setAsForeground').listen((event) {
       service.setAsForegroundService();
@@ -94,21 +95,36 @@ void onStart(ServiceInstance service) async {
 
   PathProviderAndroid.registerWith();
   await Hive.initFlutter();
-  Hive.registerAdapter(BgdTaskAdapter());
-  await Hive.openBox('tasks_a');
-  await Hive.openBox('tasks_b');
+  Hive.registerAdapter(CommandAdapter<BookOrder>(typeId: 1));
+  Hive.registerAdapter(UploadStatusAdapter());
+  Hive.registerAdapter(BookOrderAdapter());
+
+  await Hive.openBox<Command>('order');
+  await Hive.openBox('queue_order');
+
+  // Hive.registerAdapter(BgdTaskAdapter());
+  // await Hive.openBox('tasks_a');
+  // await Hive.openBox('tasks_b');
 
   // await BgdRepository().postAndDequeueTask();
   // print('after first dequeue standalaone');
 
-  BgdTaskStore().bgdStoreListenable.addListener(() async {
-    if (!BgdTaskStore().isANotEmpty) {
+  // BookOrderStore().orderStoreListenable.addListener(() async {
+  //   if (BookOrderStore().isEmpty) {
+  //     Hive.box('queue_order').close();
+  //     service.stopSelf();
+  //   }
+  // });
+
+  // Connectivity().onConnectivityChanged.listen((event) async {
+  InternetConnectionChecker().onStatusChange.listen((event) async {
+    count++;
+    print(count);
+    await BookOrderRepo().runCommands();
+    if (BookOrderStore().isEmpty) {
+      // Hive.box('queue_order').close();
       service.stopSelf();
     }
-  });
-
-  Connectivity().onConnectivityChanged.listen((event) async {
-    await BgdRepository().postAndDequeueTask();
     print('After background service is executed');
     print('FLUTTER BACKGROUND SERVICE: ${DateTime.now()}');
   });
@@ -136,7 +152,8 @@ class OrderHomePage extends StatefulWidget {
   State<OrderHomePage> createState() => _OrderHomePageState();
 }
 
-class _OrderHomePageState extends State<OrderHomePage> {
+class _OrderHomePageState extends State<OrderHomePage>
+    with WidgetsBindingObserver {
   final _bookOrderRepo = BookOrderRepo();
   late Future<ApiResult<List<Order>>> _orders;
   late List<Command> _commands;
@@ -147,56 +164,108 @@ class _OrderHomePageState extends State<OrderHomePage> {
   late StreamSubscription<ConnectivityResult> _connectivitySubscription;
   late StreamSubscription<InternetConnectionStatus> _internConnectSubscription;
 
+  void storeListener() {
+    _commands = _bookOrderRepo.getAllCommands();
+    postOrder(
+      isRunning: isRunning,
+      onIsRunningChanged: (status) {
+        print("$status: store listenable");
+        isRunning = status;
+      },
+    );
+  }
+
+  void connectivityListener(event) async {
+    postOrder(
+      isRunning: isRunning,
+      onIsRunningChanged: (status) {
+        print("$status: connectivity");
+        isRunning = status;
+      },
+    );
+  }
+
+  void internConnectListener(status) {
+    if (status == InternetConnectionStatus.connected) {
+      postOrder(
+        isRunning: isRunning,
+        onIsRunningChanged: (status) {
+          print("$status: interConnect");
+          isRunning = status;
+        },
+      );
+    }
+  }
+
+  void setupListeners() {
+    BookOrderStore().orderStoreListenable.addListener(storeListener);
+
+    _connectivitySubscription =
+        Connectivity().onConnectivityChanged.listen(connectivityListener);
+
+    _internConnectSubscription = InternetConnectionChecker()
+        .onStatusChange
+        .listen(internConnectListener);
+  }
+
+  void removeListeners() {
+    _connectivitySubscription.cancel();
+    _internConnectSubscription.cancel();
+    BookOrderStore().orderStoreListenable.removeListener(storeListener);
+  }
+
   @override
   void initState() {
     super.initState();
+    print('in initState');
+    FlutterBackgroundService().invoke('stopService');
+    WidgetsBinding.instance!.addObserver(this);
     _orders = _bookOrderRepo.getOrders();
     _commands = _bookOrderRepo.getAllCommands();
 
-    BookOrderStore().orderStoreListenable.addListener(() {
-      _commands = _bookOrderRepo.getAllCommands();
-      print("in store listenable");
-      print(isRunning);
-      postOrder(
-        isRunning: isRunning,
-        onIsRunningChanged: (status) {
-          print("$status: store listenable");
-          isRunning = status;
-        },
-      );
-    });
+    setupListeners();
+  }
 
-    _connectivitySubscription =
-        Connectivity().onConnectivityChanged.listen((event) async {
-      print("in connectivity: $event");
-      print(isRunning);
-      postOrder(
-        isRunning: isRunning,
-        onIsRunningChanged: (status) {
-          print("$status: connectivity");
-          isRunning = status;
-        },
-      );
-    });
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) async {
+    super.didChangeAppLifecycleState(state);
 
-    _internConnectSubscription =
-        InternetConnectionChecker().onStatusChange.listen((status) {
-      if (status == InternetConnectionStatus.connected) {
-        postOrder(
-          isRunning: isRunning,
-          onIsRunningChanged: (status) {
-            print("$status: interConnect");
-            isRunning = status;
-          },
-        );
+    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+      print('in inactive || paused of didChangeAppLifecycleState');
+      return;
+    }
+
+    if (state == AppLifecycleState.detached  && !BookOrderStore().isEmpty) {
+      print('in detached if of didChangeAppLifecycleState');
+      FlutterBackgroundService().startService().then(
+          (value) => FlutterBackgroundService().invoke("setAsForeground"));
+    }
+
+    // if (state == AppLifecycleState.paused && !BookOrderStore().isEmpty) {
+    //   print('in paused if of didChangeAppLifecycleState');
+    //   removeListeners();
+    //   FlutterBackgroundService().startService().then(
+    //       (value) => FlutterBackgroundService().invoke("setAsBackground"));
+    //       // (value) => FlutterBackgroundService().invoke("setAsForeground"));
+    // }
+
+    if (state == AppLifecycleState.resumed) {
+      print('in resumed');
+
+      if (await FlutterBackgroundService().isRunning()) {
+        FlutterBackgroundService().invoke('stopService');
       }
-    });
+      // setupListeners();
+      setState(() {});
+    }
   }
 
   @override
   void dispose() {
-    _connectivitySubscription.cancel();
-    _internConnectSubscription.cancel();
+    print("in dispose");
+    removeListeners();
+    WidgetsBinding.instance!.removeObserver(this);
+
     super.dispose();
   }
 
@@ -209,7 +278,6 @@ class _OrderHomePageState extends State<OrderHomePage> {
         isUploading = true;
       });
       await _bookOrderRepo.runCommands().then((value) {
-        print('after run commands.');
         _orders = _bookOrderRepo.getOrders();
         setState(() {
           isUploading = false;
@@ -285,7 +353,6 @@ class _OrderHomePageState extends State<OrderHomePage> {
                 : ValueListenableBuilder(
                     valueListenable: BookOrderStore().orderStoreListenable,
                     builder: (context, _, __) {
-                      print('In valuelistenable');
                       return ListView.builder(
                         itemBuilder: (context, index) {
                           final order = _commands[index].data as BookOrder;

@@ -10,7 +10,7 @@ import '../api/network_exceptions.dart';
 
 final dioClient = DioClient(Dio());
 const token =
-    '5ad6ae2c8dd35626ca65f128dbf9a8ec60e1511d167f42d2d0268007b1be9163';
+    '38b0406596fe3909971f1d63f4889cfe42e09cfeba848a72ce4f9f5a57303a37';
 
 class PostOrderReceiver extends Receiver {
   @override

@@ -11,6 +11,7 @@ import '../models/command.dart';
 import 'book_order_store.dart';
 
 const uuid = Uuid();
+int count = 0;
 
 class BookOrderRepo {
   final _bookOrderStore = BookOrderStore();
@@ -28,6 +29,7 @@ class BookOrderRepo {
   }
 
   List<Command> getAllCommands() {
+    print("All Commands" + _bookOrderStore.getAllCommands().toString());
     return _bookOrderStore.getAllCommands();
   }
 
@@ -45,15 +47,11 @@ class BookOrderRepo {
         result = await run();
       });
       if (result is Success) {
-        print(duration.inMilliseconds);
-        print('Successful retry');
         return result;
       }
       if (result is Failure) {
         retries--;
         currentDuration *= 2;
-        print(duration.inMilliseconds);
-        print('failed retrying again...');
         retried = true;
       }
     }
@@ -64,21 +62,21 @@ class BookOrderRepo {
   Future<void> runCommands() async {
     List<Command> commands = getAllCommands();
     if (commands.isNotEmpty && await networkInfo.isConnected) {
-      for (var command in commands) {
-        final receiver = keyToReceiver[command.receiver]!;
-        receiver.data = command.data;
+      count++;
+      print("count in runCommand: $count");
+      while (commands.isNotEmpty) {
+        final commandx = await _bookOrderStore.popCommand();
+        final receiver = keyToReceiver[commandx.receiver]!;
+        receiver.data = commandx.data;
         print(receiver.data.customerName);
 
         late ApiResult<dynamic> result;
 
         result = await retry(() => receiver());
 
-        if (result is Success) {
-          _bookOrderStore.deleteCommand();
-          print('Success');
-        } else {
-          command.status = UploadStatus.failed;
-          print('Failure');
+        if (result is Failure) {
+          _bookOrderStore.enqueueCommand(commandx);
+          commandx.status = UploadStatus.failed;
           break;
         }
       }
@@ -91,9 +89,9 @@ class BookOrderRepo {
   }
 
   Future<ApiResult> deleteOrders(String orderId) async {
-    final getOrders = DeleteOrdersReceiver();
-    getOrders.data = orderId;
-    return getOrders();
+    final deleteOrders = DeleteOrdersReceiver();
+    deleteOrders.data = orderId;
+    return deleteOrders();
   }
 }
 
